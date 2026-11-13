@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>개신오거리 보행신호</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#f4f3ef; --card:#ffffff; --ink:#1d1d1b; --muted:#6b6a65; --line:#e3e1db;
+    --road:#dcd9d2; --go:#1f9d55; --go-soft:#e3f4ea; --stop:#d64545;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:"Noto Sans KR",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  main{max-width:520px;margin:0 auto;padding:20px 16px 110px}
+  h1{font-size:20px;margin:0 0 2px;font-weight:700}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 14px}
+  .sync{font-size:13px;padding:8px 12px;border-radius:10px;margin-bottom:12px}
+  .sync.warn{background:#fff4dc;color:#7a5600}
+  .sync.ok{background:var(--card);color:var(--muted);border:1px solid var(--line)}
+  .map{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:6px}
+  svg{display:block;width:100%;height:auto}
+  .list{margin-top:14px;display:flex;flex-direction:column;gap:8px}
+  .row{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px;display:grid;grid-template-columns:36px 1fr auto;gap:4px 12px;align-items:center}
+  .row.home{border-color:#b9b6ad}
+  .num{grid-row:span 2;width:36px;height:36px;border-radius:50%;display:grid;place-items:center;font-weight:700;color:#fff;background:var(--stop)}
+  .row.go .num{background:var(--go)}
+  .name{font-size:14px;font-weight:500}
+  .tag{font-size:11px;color:var(--muted);margin-left:6px;font-weight:400}
+  .state{font-size:13px;color:var(--stop)}
+  .row.go .state{color:var(--go)}
+  .next{color:var(--muted);margin-left:6px;font-variant-numeric:tabular-nums}
+  .sec{grid-row:span 2;font-size:28px;font-weight:700;font-variant-numeric:tabular-nums;text-align:right;min-width:64px}
+  .sec small{font-size:13px;font-weight:500;margin-left:1px}
+  .bar{grid-column:2 / 4;height:4px;background:var(--line);border-radius:2px;overflow:hidden;margin-top:6px}
+  .bar i{display:block;height:100%;background:var(--stop)}
+  .row.go .bar i{background:var(--go)}
+  .syncbtn{grid-column:2 / 4;justify-self:start;margin-top:6px;font:inherit;font-size:12px;padding:5px 10px;border-radius:8px;border:1px solid var(--line);background:#faf9f6;color:var(--ink);cursor:pointer}
+  .syncbtn:active{background:var(--go-soft)}
+  details{margin-top:16px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+  summary{cursor:pointer;font-weight:500;font-size:14px}
+  table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px}
+  th{font-weight:500;color:var(--muted);text-align:left;padding:4px 0}
+  td{padding:4px 0}
+  td input{width:72px;font:inherit;padding:5px 6px;border:1px solid var(--line);border-radius:6px;font-variant-numeric:tabular-nums}
+  .hint{font-size:12px;color:var(--muted);line-height:1.6;margin:10px 0 0}
+  .reset{margin-top:10px;font:inherit;font-size:12px;padding:5px 10px;border-radius:8px;border:1px solid var(--line);background:#faf9f6;cursor:pointer}
+  .note{font-size:12px;color:var(--muted);margin-top:16px;line-height:1.6}
+
+  /* 화면 맨 아래 고정 시계 */
+  .clockbar{position:fixed;left:0;right:0;bottom:0;background:#1d1d1b;color:#fff;padding:10px 16px calc(10px + env(safe-area-inset-bottom));text-align:center}
+  .clockbar .t{font-size:30px;font-weight:700;letter-spacing:.5px;font-variant-numeric:tabular-nums}
+  .clockbar .t small{font-size:18px;font-weight:500;opacity:.7}
+  .clockbar .d{font-size:12px;opacity:.65;margin-top:1px}
+</style>
+</head>
+<body>
+<main>
+  <h1>개신오거리 보행신호</h1>
+  <p class="sub">시계방향으로 하나씩 켜지는 보행신호를 시간표로 계산해서 보여 줍니다. (초안)</p>
+
+  <div id="sync" class="sync warn"></div>
+
+  <div class="map">
+    <svg id="svg" viewBox="0 0 400 400" aria-label="개신오거리 횡단보도 배치도"></svg>
+  </div>
+
+  <div class="list" id="list"></div>
+
+  <details>
+    <summary>신호 시간 설정</summary>
+    <table>
+      <thead><tr><th>횡단보도</th><th>녹색 (초)</th><th>다음까지 간격 (초)</th></tr></thead>
+      <tbody id="cfg"></tbody>
+    </table>
+    <table><tbody><tr><td>실제 주기 C (초)</td><td><input type="number" min="1" step="0.01" id="cIn"></td><td></td></tr></tbody></table>
+    <p class="hint" id="cycle"></p>
+    <p class="hint">녹색·간격 값은 2026년 11월 13일 실측(새벽 계획으로 추정)입니다. 한 바퀴씩 잰 값의 합계는 오차가 있어서, 실제 주기 C에 맞춰 비례로 늘리거나 줄여 계산합니다.</p>
+    <button class="reset" id="reset">기본값으로 되돌리기</button>
+  </details>
+
+  <p class="note">현장에서 아무 횡단보도든 녹색이 막 켜지는 순간 그 줄의 "지금 막 켜짐" 버튼을 누르면 시간이 맞춰집니다. 계산값이라 실제 신호와 다를 수 있으니, 건널 때는 반드시 실제 신호등을 보세요.</p>
+</main>
+
+<div class="clockbar">
+  <div class="t" id="clock">--:--:--</div>
+  <div class="d" id="date"></div>
+</div>
+
+<script>
+/* =====================================================================
+   1. 데이터
+   ===================================================================== */
+
+// 횡단보도 5개. 시계방향 순서대로. a = 약도에서 도로 방향(도, 오른쪽이 0, 시계방향 +)
+const CROSSWALKS = [
+  { n: 1, name: "정문약국 앞",   tag: "",        a: -105 },
+  { n: 2, name: "빽다방 앞",     tag: "모충로",   a: -12 },
+  { n: 3, name: "집 앞",         tag: "1순환로",  a: 35, home: true },
+  { n: 4, name: "대학약국 쪽",   tag: "모충로",   a: 128 },
+  { n: 5, name: "충북대병원 쪽", tag: "",        a: 200 },
+];
+
+// 기본값. g = 녹색 시간, d = 꺼지고 다음 번호가 켜질 때까지 대기, C = 실제 주기 (모두 초)
+const DEFAULT = {
+  g: [32.30, 25.58, 27.64, 32.82, 22.14],
+  d: [ 6.67,  5.55,  5.24,  7.27,  4.72],
+  C: 170.17,
+  t0: null,     // 기준 시각 (밀리초). 1번이 녹색으로 켜진 순간
+  syncN: null,  // 몇 번 횡단보도로 맞췄는지
+  syncAt: null, // 맞춘 실제 시각
+};
+
+/* =====================================================================
+   2. 계산 (화면과 상관없는 순수 계산)
+   ===================================================================== */
+
+// 각 횡단보도의 녹색 시작 s[k], 끝 e[k] (주기 안에서 몇 초째인지)를 계산
+function schedule(cfg) {
+  let S = 0;                                   // 측정값 합계
+  for (let k = 0; k < 5; k++) S += cfg.g[k] + cfg.d[k];
+
+  const C = cfg.C > 0 ? cfg.C : S;             // 실제 주기
+  const f = C / S;                             // 합계를 주기에 맞추는 비율
+
+  const s = [], e = [];
+  let t = 0;
+  for (let k = 0; k < 5; k++) {
+    s[k] = t;
+    e[k] = t + cfg.g[k] * f;
+    t += (cfg.g[k] + cfg.d[k]) * f;
+  }
+  return { s, e, C, S };
+}
+
+// 지금 시각 nowMs에서 횡단보도 k의 상태를 계산
+//   green: 녹색인지, left: 다음 바뀔 때까지 남은 초, total: 이번 구간 전체 길이
+function signalState(nowMs, t0Ms, sch, k) {
+  const { s, e, C } = sch;
+  let phi = ((nowMs - t0Ms) / 1000) % C;       // 주기 안에서 지금 위치 (초)
+  if (phi < 0) phi += C;
+
+  const green = (phi >= s[k] && phi < e[k]);
+  let left;
+  if (green) {
+    left = e[k] - phi;                         // 녹색이 꺼질 때까지
+  } else {
+    left = s[k] - phi;                         // 다음 녹색까지
+    if (left < 0) left += C;
+  }
+  const gk = e[k] - s[k];
+  const total = green ? gk : C - gk;
+  return { green, left, total, phi };
+}
+
+/* =====================================================================
+   3. 설정 저장 (각 방문자 브라우저에만 저장됨)
+   ===================================================================== */
+
+const KEY = "gaesin-signal-v3";
+let cfg = loadCfg();
+
+function loadCfg() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(KEY));
+    if (saved && Array.isArray(saved.g) && saved.g.length === 5) return saved;
+  } catch (err) {}
+  return JSON.parse(JSON.stringify(DEFAULT));
+}
+function saveCfg() {
+  try { localStorage.setItem(KEY, JSON.stringify(cfg)); } catch (err) {}
+}
+
+/* =====================================================================
+   4. 화면 만들기 (처음 한 번)
+   ===================================================================== */
+
+const pad = (x, n = 2) => String(x).padStart(n, "0");
+function hms(ms) {
+  const d = new Date(ms);
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+// --- 약도 (SVG) ---
+const NS = "http://www.w3.org/2000/svg";
+const svg = document.getElementById("svg");
+const CX = 200, CY = 200;
+function el(tag, attrs, parent) {
+  const n = document.createElementNS(NS, tag);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  (parent || svg).appendChild(n);
+  return n;
+}
+const rad = deg => deg * Math.PI / 180;
+
+for (const c of CROSSWALKS) {                  // 도로
+  const ux = Math.cos(rad(c.a)), uy = Math.sin(rad(c.a));
+  el("line", { x1: CX, y1: CY, x2: CX + ux * 230, y2: CY + uy * 230, stroke: "var(--road)", "stroke-width": 50 });
+}
+el("circle", { cx: CX, cy: CY, r: 40, fill: "var(--road)" });
+el("text", { x: CX, y: CY - 4, "text-anchor": "middle", "font-size": 12, fill: "#8a877f", "font-weight": 500 }).textContent = "개신";
+el("text", { x: CX, y: CY + 12, "text-anchor": "middle", "font-size": 12, fill: "#8a877f", "font-weight": 500 }).textContent = "오거리";
+
+const marks = [];                              // 신호 표시 (번호 동그라미 + 남은 초 + 다음 바뀜 시각)
+CROSSWALKS.forEach((c, k) => {
+  const ux = Math.cos(rad(c.a)), uy = Math.sin(rad(c.a));
+  const g = el("g", { transform: `translate(${CX + ux * 82} ${CY + uy * 82}) rotate(${c.a})` });
+  const stripes = [];
+  for (let i = -3; i <= 3; i++) {
+    stripes.push(el("rect", { x: -10, y: i * 7 - 2.5, width: 20, height: 5, rx: 1, fill: "#fff" }, g));
+  }
+  const badge = el("g", { transform: `translate(${CX + ux * 150} ${CY + uy * 150})` });
+  const ring = el("circle", { r: 28, fill: "var(--stop)" }, badge);
+  if (c.home) el("circle", { r: 33, fill: "none", stroke: "#1d1d1b", "stroke-width": 1.5, "stroke-dasharray": "3 3" }, badge);
+  el("text", { y: -8, "text-anchor": "middle", "font-size": 10, fill: "#fff", "font-weight": 500 }, badge).textContent = c.n + "번";
+  const sec = el("text", { y: 9, "text-anchor": "middle", "font-size": 18, fill: "#fff", "font-weight": 700 }, badge);
+  const nextBg = el("rect", { x: -27, y: 34, width: 54, height: 15, rx: 7.5, fill: "#fff", stroke: "#e3e1db" }, badge);
+  const next = el("text", { y: 45, "text-anchor": "middle", "font-size": 10, fill: "#1d1d1b", "font-weight": 500, style: "font-variant-numeric:tabular-nums" }, badge);
+  marks[k] = { stripes, ring, sec, next };
+});
+
+// --- 목록 ---
+const list = document.getElementById("list");
+const rows = CROSSWALKS.map((c, k) => {
+  const r = document.createElement("div");
+  r.className = "row" + (c.home ? " home" : "");
+  r.innerHTML = `<div class="num">${c.n}</div>
+    <div class="name">${c.name}${c.tag ? `<span class="tag">${c.tag}</span>` : ""}${c.home ? `<span class="tag">· 우리 집</span>` : ""}</div>
+    <div class="sec"></div>
+    <div class="state"><span class="st"></span><span class="next"></span></div>
+    <div class="bar"><i></i></div>
+    <button class="syncbtn">지금 막 켜짐 → 시간 맞추기</button>`;
+  r.querySelector(".syncbtn").addEventListener("click", () => {
+    const sch = schedule(cfg);
+    cfg.t0 = Date.now() - sch.s[k] * 1000;     // k번이 지금 켜졌다 = 1번은 s[k]초 전에 켜졌다
+    cfg.syncN = c.n;
+    cfg.syncAt = Date.now();
+    saveCfg();
+  });
+  list.appendChild(r);
+  return {
+    r,
+    sec: r.querySelector(".sec"),
+    st: r.querySelector(".st"),
+    next: r.querySelector(".next"),
+    bar: r.querySelector(".bar i"),
+  };
+});
+
+// --- 설정 칸 ---
+const tbody = document.getElementById("cfg");
+function buildCfgTable() {
+  tbody.innerHTML = "";
+  CROSSWALKS.forEach((c, k) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${c.n}번 ${c.name}</td>
+      <td><input type="number" min="1" step="0.1" value="${cfg.g[k]}" data-f="g"></td>
+      <td><input type="number" min="0" step="0.1" value="${cfg.d[k]}" data-f="d"></td>`;
+    tr.querySelectorAll("input").forEach(inp => inp.addEventListener("input", () => {
+      const v = parseFloat(inp.value);
+      if (!isNaN(v) && v >= 0) { cfg[inp.dataset.f][k] = v; saveCfg(); }
+    }));
+    tbody.appendChild(tr);
+  });
+}
+buildCfgTable();
+
+const cIn = document.getElementById("cIn");
+if (!(cfg.C > 0)) cfg.C = DEFAULT.C;
+cIn.value = cfg.C;
+cIn.addEventListener("input", () => {
+  const v = parseFloat(cIn.value);
+  if (!isNaN(v) && v > 0) { cfg.C = v; saveCfg(); }
+});
+document.getElementById("reset").addEventListener("click", () => {
+  cfg.g = DEFAULT.g.slice(); cfg.d = DEFAULT.d.slice(); cfg.C = DEFAULT.C;
+  cIn.value = cfg.C; saveCfg(); buildCfgTable();
+});
+
+/* =====================================================================
+   5. 매 0.1초마다 화면 갱신
+   ===================================================================== */
+
+const WEEK = ["일", "월", "화", "수", "목", "금", "토"];
+
+function tick() {
+  const now = Date.now();
+  const sch = schedule(cfg);
+
+  // 아래 시계
+  const d = new Date(now);
+  document.getElementById("clock").innerHTML = `${hms(now)}<small>.${Math.floor(d.getMilliseconds() / 100)}</small>`;
+  document.getElementById("date").textContent = `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일 (${WEEK[d.getDay()]})`;
+
+  // 기준 시각
+  let t0 = cfg.t0;
+  const syncEl = document.getElementById("sync");
+  if (t0 == null) {
+    const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
+    t0 = midnight.getTime();
+    syncEl.className = "sync warn";
+    syncEl.textContent = "아직 시간을 맞추지 않았습니다. 지금 보이는 숫자는 예시입니다.";
+  } else {
+    const at = cfg.syncAt || t0;
+    syncEl.className = "sync ok";
+    syncEl.textContent = `${new Date(at).toLocaleDateString("ko-KR")} ${hms(at)}에 ${cfg.syncN || 1}번 기준으로 맞춤`;
+  }
+  document.getElementById("cycle").textContent = `측정값 합계 ${sch.S.toFixed(2)}초 → 실제 주기 ${sch.C.toFixed(2)}초에 맞춰 계산`;
+
+  // 횡단보도 5개
+  CROSSWALKS.forEach((c, k) => {
+    const st = signalState(now, t0, sch, k);
+    const shown = Math.ceil(st.left - 1e-6);   // 화면에 보일 남은 초 (올림)
+    const changeAt = hms(now + st.left * 1000); // 다음에 바뀌는 시각
+
+    const m = marks[k];
+    m.ring.setAttribute("fill", st.green ? "var(--go)" : "var(--stop)");
+    m.sec.textContent = shown;
+    m.next.textContent = changeAt;
+    m.stripes.forEach(r => r.setAttribute("fill", st.green ? "#bfe8cf" : "#fff"));
+
+    const r = rows[k];
+    r.r.classList.toggle("go", st.green);
+    r.sec.innerHTML = `${shown}<small>초</small>`;
+    r.st.textContent = st.green ? "녹색 · 꺼질 때까지" : "빨간불 · 녹색까지";
+    r.next.textContent = `→ ${changeAt}`;
+    r.bar.style.width = (st.total > 0 ? Math.max(0, Math.min(1, st.left / st.total)) * 100 : 0) + "%";
+  });
+}
+
+tick();
+setInterval(tick, 100);
+</script>
+</body>
+</html>
