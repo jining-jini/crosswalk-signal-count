@@ -11,6 +11,12 @@ const CROSSWALKS = {
   5: { name: "충북대병원 쪽", x: 38.0, y: 46.7, tx: 32.9, ty: 49.8 },
 };
 
+// 처음 열었을 때 화면 한가운데에 올 지점 = 오거리 중심 (횡단보도 5개 위치의 평균)
+const CENTER = {
+  x: Object.values(CROSSWALKS).reduce((a, c) => a + c.x, 0) / 5,   // 지도 가로의 %
+  y: Object.values(CROSSWALKS).reduce((a, c) => a + c.y, 0) / 5,   // 지도 세로의 %
+};
+
 // 켜지는 순서 (시계방향)
 const ORDER = [5, 1, 2, 3, 4];
 
@@ -91,13 +97,139 @@ function stateNow(n, nowMs) {
   let phi = (todOf(nowMs) - seg.A) % P.C; if (phi < 0) phi += P.C;
   const green = phi >= P.s[n] && phi < P.e[n];
   const left = green ? P.e[n] - phi : (next[0] - nowMs) / 1000;
-  // 다음 변화가 지금 시간대 밖(전환 구간 너머)이면 남은 초는 알 수 없음
   const known = true;   // 180초 하나로만 계산하므로 항상 계산 가능
   return { known, green, left, next, seg };
 }
 
 /* =====================================================================
-   3. 화면
+   3. 지도 확대·이동 (브라우저 확대 대신 직접 처리 → 아래 시계는 크기 그대로)
+   ===================================================================== */
+
+const pz = document.getElementById("pz");          // 손가락을 받는 창
+const stage = document.getElementById("stage");    // 지도 판 (1000 x 1333px 기준)
+const W0 = 1000, H0 = W0 * 4 / 3;
+const MAX_FIRST_W = 760;   // 넓은 화면(컴퓨터)에서 처음 지도 너비 상한 (px)
+const MAX_ZOOM = 5;        // 처음 크기의 몇 배까지 확대
+
+let vw = 0, vh = 0;                  // 창 크기
+let s = 1, tx = 0, ty = 0;           // 지금 배율, 이동량
+let sFirst = 1, sMin = 1, sMax = 5;  // 처음 배율, 최소, 최대
+
+function measure() {
+  vw = pz.clientWidth; vh = pz.clientHeight;
+  const cover = Math.max(vw / W0, vh / H0);     // 빈 곳 없이 화면을 채우는 배율
+  const contain = Math.min(vw / W0, vh / H0);   // 지도 전체가 다 보이는 배율
+  sFirst = Math.min(cover, MAX_FIRST_W / W0);
+  sMin = Math.min(contain, sFirst);
+  sMax = sFirst * MAX_ZOOM;
+}
+
+// 지도가 창 밖으로 빠져나가 빈 곳이 생기지 않게 제한
+function clampView() {
+  s = Math.min(sMax, Math.max(sMin, s));
+  const w = W0 * s, h = H0 * s;
+  // 지도가 창보다 크면: 창 안에 빈 곳이 안 생기게 / 작으면: 지도가 창 밖으로 안 나가게
+  tx = w >= vw ? Math.min(0, Math.max(vw - w, tx)) : Math.max(0, Math.min(vw - w, tx));
+  ty = h >= vh ? Math.min(0, Math.max(vh - h, ty)) : Math.max(0, Math.min(vh - h, ty));
+}
+
+function applyView() {
+  clampView();
+  stage.style.transform = `translate(${tx}px, ${ty}px) scale(${s})`;
+  // 확대할수록 신호 표시를 거꾸로 줄여서 화면에서 보이는 크기는 그대로 (축소할 땐 지도와 같이 작아짐)
+  stage.style.setProperty("--k", Math.min(1, sFirst / s));
+}
+
+// 오거리 중심을 화면 한가운데로
+function goHome() {
+  measure();
+  s = sFirst;
+  tx = vw / 2 - (CENTER.x / 100) * W0 * s;
+  ty = vh / 2 - (CENTER.y / 100) * H0 * s;
+  applyView();
+}
+
+// (px, py) 지점을 고정한 채로 f 배 확대
+function zoomAt(px, py, f) {
+  const ns = Math.min(sMax, Math.max(sMin, s * f));
+  const k = ns / s;
+  tx = px - (px - tx) * k;
+  ty = py - (py - ty) * k;
+  s = ns;
+  applyView();
+}
+
+// 손가락 (마우스 포함) 처리: 한 손가락 = 이동, 두 손가락 = 확대·축소
+const pts = new Map();
+let pair = null;   // 두 손가락일 때 직전 중심점과 거리
+function pairInfo() {
+  const [a, b] = [...pts.values()];
+  return { mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, d: Math.hypot(a.x - b.x, a.y - b.y) };
+}
+pz.addEventListener("pointerdown", e => {
+  try { pz.setPointerCapture(e.pointerId); } catch (_) {}
+  pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  pair = pts.size === 2 ? pairInfo() : null;
+});
+pz.addEventListener("pointermove", e => {
+  const p = pts.get(e.pointerId);
+  if (!p) return;
+  const dx = e.clientX - p.x, dy = e.clientY - p.y;
+  p.x = e.clientX; p.y = e.clientY;
+  if (pts.size === 1) {
+    tx += dx; ty += dy; applyView();
+  } else if (pts.size === 2 && pair) {
+    const now = pairInfo(), r = pz.getBoundingClientRect();
+    tx += now.mx - pair.mx; ty += now.my - pair.my;                       // 두 손가락 같이 끌기
+    if (pair.d > 0) zoomAt(now.mx - r.left, now.my - r.top, now.d / pair.d); // 벌리기·오므리기
+    else applyView();
+    pair = now;
+  }
+});
+function pointerEnd(e) {
+  pts.delete(e.pointerId);
+  pair = pts.size === 2 ? pairInfo() : null;
+}
+pz.addEventListener("pointerup", pointerEnd);
+pz.addEventListener("pointercancel", pointerEnd);
+
+// 컴퓨터: 마우스 휠·트랙패드로 확대
+pz.addEventListener("wheel", e => {
+  e.preventDefault();
+  const r = pz.getBoundingClientRect();
+  const dy = e.deltaY * (e.deltaMode === 1 ? 33 : 1);
+  zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-dy * (e.ctrlKey ? 0.01 : 0.0015)));
+}, { passive: false });
+
+// 아이폰 사파리: 페이지 전체 확대 제스처 막기 (지도 확대는 위에서 직접 처리)
+for (const t of ["gesturestart", "gesturechange", "gestureend"]) {
+  document.addEventListener(t, e => e.preventDefault());
+}
+
+// 화면 크기가 바뀌면 (회전 등) 보고 있던 곳과 배율을 유지
+let started = false;
+function onResize() {
+  if (!started) { started = true; goHome(); return; }
+  const cx = (vw / 2 - tx) / s, cy = (vh / 2 - ty) / s;   // 지금 화면 가운데의 지도 위치
+  const ratio = s / sFirst;
+  measure();
+  s = sFirst * ratio;
+  tx = vw / 2 - cx * s; ty = vh / 2 - cy * s;
+  applyView();
+}
+if ("ResizeObserver" in window) new ResizeObserver(onResize).observe(pz);
+else { window.addEventListener("resize", onResize); onResize(); }
+
+document.getElementById("homeBtn").addEventListener("click", goHome);
+
+// 정보 창 열고 닫기
+const panel = document.getElementById("panel");
+document.getElementById("infoBtn").addEventListener("click", () => panel.classList.toggle("hide"));
+document.getElementById("panelClose").addEventListener("click", () => panel.classList.add("hide"));
+document.addEventListener("keydown", e => { if (e.key === "Escape") panel.classList.add("hide"); });
+
+/* =====================================================================
+   4. 화면
    ===================================================================== */
 
 const pad = (x, n = 2) => String(x).padStart(n, "0");
@@ -111,7 +243,7 @@ function countText(s) {
   return v < 100 ? String(v) : `${Math.floor(v / 60)}:${pad(v % 60)}`;
 }
 
-const map = document.getElementById("map");
+// 신호 표시 만들기: 동그라미와 시각 두 줄을 한 묶음(.sig)으로
 const ui = {};
 for (const n of [1, 2, 3, 4, 5]) {
   const c = CROSSWALKS[n];
@@ -119,13 +251,12 @@ for (const n of [1, 2, 3, 4, 5]) {
   sig.className = "sig";
   sig.style.left = c.x + "%"; sig.style.top = c.y + "%";
   sig.title = `${n}번 ${c.name}`;
-  sig.innerHTML = `<div class="dot"></div>`;
-  map.appendChild(sig);
-  const times = document.createElement("div");
-  times.className = "times";
-  times.style.left = c.tx + "%"; times.style.top = c.ty + "%";
-  times.innerHTML = `<div class="l1"></div><div class="l2"></div>`;
-  map.appendChild(times);
+  sig.innerHTML = `<div class="dot"></div><div class="times"><div class="l1"></div><div class="l2"></div></div>`;
+  // 시각 두 줄: 동그라미 기준 상대 위치 (지도 % → cqw. 세로는 지도가 가로의 4/3)
+  const times = sig.querySelector(".times");
+  times.style.left = `calc(3.6cqw + ${(c.tx - c.x).toFixed(2)}cqw)`;
+  times.style.top = `calc(3.6cqw + ${((c.ty - c.y) * 4 / 3).toFixed(2)}cqw)`;
+  stage.appendChild(sig);
   ui[n] = { sig, dot: sig.querySelector(".dot"), l1: times.querySelector(".l1"), l2: times.querySelector(".l2") };
 }
 
@@ -142,7 +273,7 @@ const WEEK = ["일", "월", "화", "수", "목", "금", "토"];
 let last = 0;
 
 function frame() {
-  const now = Date.now();
+  const now = Date.now();                 // 보는 사람 기기의 시계를 매번 새로 읽음
   const tod = todOf(now);
   const k = new Date(now + KST);
 
@@ -152,8 +283,7 @@ function frame() {
 
   if (now - last >= 100) {
     last = now;
-    const seg = segAt(tod);
-    document.getElementById("plan").textContent = `${dateText} · 180초 주기`;
+    document.getElementById("plan").textContent = `${dateText} · 180초 주기 · 실제 신호를 꼭 확인하세요`;
 
     for (const n of ORDER) {
       const st = stateNow(n, now), u = ui[n];
